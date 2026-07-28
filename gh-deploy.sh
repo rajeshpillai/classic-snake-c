@@ -23,7 +23,8 @@
 #   GH_REPO     repo name when creating a new repo  (default: directory name)
 #   GH_REMOTE   full remote URL, skips creation (default: derived from gh)
 #
-# Requires: emsdk on PATH (source ~/emsdk/emsdk_env.sh), gh, git.
+# Requires: git, and the Emscripten SDK (found automatically -- see
+#           web/find-emsdk.sh). gh is optional; see above.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +50,7 @@ while [[ $# -gt 0 ]]; do
     --push)     PUSH=1; shift ;;
     --private)  VISIBILITY="--private"; shift ;;
     --branch)   GH_BRANCH="${2:?--branch needs a value}"; shift 2 ;;
-    -h|--help)  sed -n '3,25p' "${BASH_SOURCE[0]}" | sed 's|^# \{0,1\}||'; exit 0 ;;
+    -h|--help)  sed -n '3,27p' "${BASH_SOURCE[0]}" | sed 's|^# \{0,1\}||'; exit 0 ;;
     *)          die "unknown option: $1 (try --help)" ;;
   esac
 done
@@ -59,8 +60,18 @@ done
 command -v git >/dev/null || die "git not found on PATH"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repository"
 
-command -v emcc >/dev/null \
-  || die "emcc not found — run: source ~/emsdk/emsdk_env.sh"
+# Activates emsdk from the usual locations if it is not already on PATH, so
+# this works in a fresh shell.
+# shellcheck source=web/find-emsdk.sh
+. "$REPO_ROOT/web/find-emsdk.sh"
+command -v emcc >/dev/null || die "emcc not found — install the Emscripten SDK:
+    git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
+    cd ~/emsdk && ./emsdk install latest && ./emsdk activate latest
+  (or set EMSDK=/path/to/emsdk if it lives somewhere unusual)"
+# Not `[[ ... ]] && info ...` -- under `set -e` a false test would end the run.
+if [[ -n "${EMSDK_FOUND_IN:-}" ]]; then
+  info "using emsdk from $EMSDK_FOUND_IN"
+fi
 
 if (( PUSH )); then
   # Publishing a tree that does not match a commit makes the deployed site

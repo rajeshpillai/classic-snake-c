@@ -59,11 +59,17 @@ debug: clean $(TARGET)
 # Needs the Emscripten SDK on PATH:  source ~/emsdk/emsdk_env.sh
 web: $(WEB_OUT)
 
-$(WEB_OUT): $(WEB_SRCS) web/ncurses.h web/shell.html
-	@command -v $(EMCC) >/dev/null || { \
-	  echo "emcc not found. Run: source ~/emsdk/emsdk_env.sh"; exit 1; }
+# web/find-emsdk.sh puts emcc on PATH if it isn't already, so this works in a
+# fresh shell. It has to be sourced in the SAME shell as the compile -- make
+# runs each recipe line in its own shell, hence the one long command.
+$(WEB_OUT): $(WEB_SRCS) web/ncurses.h web/shell.html web/find-emsdk.sh
 	@mkdir -p docs
-	$(EMCC) $(EMFLAGS) -o $@ $(WEB_SRCS)
+	@bash -c '. web/find-emsdk.sh; \
+	  command -v $(EMCC) >/dev/null || { \
+	    echo "emcc not found -- install emsdk (see README) or set EMSDK=/path/to/emsdk"; \
+	    exit 1; }; \
+	  echo "$(EMCC) $(EMFLAGS) -o $@ $(WEB_SRCS)"; \
+	  $(EMCC) $(EMFLAGS) -o $@ $(WEB_SRCS)'
 	@echo "built $@ ($$(du -h $@ | cut -f1), self-contained)"
 
 # GitHub Pages serves docs/ over HTTP; this mimics it locally.

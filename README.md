@@ -99,17 +99,21 @@ controls on touch devices.
 ### Building it
 
 ```sh
-source ~/emsdk/emsdk_env.sh    # needs the Emscripten SDK
-make web                       # -> docs/index.html
-make web-serve                 # build and serve at localhost:8000
+make web            # -> docs/index.html
+make web-serve      # build and serve at localhost:8000
 ```
 
-Install the SDK with:
+You need the Emscripten SDK:
 
 ```sh
 git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
 cd ~/emsdk && ./emsdk install latest && ./emsdk activate latest
 ```
+
+You do **not** need to `source emsdk_env.sh` first.
+[web/find-emsdk.sh](web/find-emsdk.sh) locates an install in `$EMSDK`,
+`~/emsdk`, `/opt/emsdk` or `/usr/local/emsdk` and activates it for the build.
+Set `EMSDK=/path/to/emsdk` if yours lives elsewhere.
 
 ### Deploying
 
