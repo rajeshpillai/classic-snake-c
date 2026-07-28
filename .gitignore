@@ -10,6 +10,10 @@ tutorial/lessons/*/*
 # High score file, if it ever lands here (no $HOME)
 .snake_highscore
 
+# Generated wasm bundle. Built by `make web`, published to the gh-pages
+# branch by ./gh-deploy.sh -- not carried in main's history.
+docs/
+
 # Sanitizer / debug leftovers
 *.dSYM/
 core

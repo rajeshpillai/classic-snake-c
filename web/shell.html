@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>classic-snake — terminal Snake, compiled to WebAssembly</title>
+<meta name="description" content="A C + ncurses Snake game compiled to WebAssembly. Same source as the terminal build.">
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --edge: #30363d;
+    --fg: #e6edf3; --muted: #8b949e; --accent: #3fb950;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa; --panel: #fff; --edge: #d0d7de;
+      --fg: #1f2328; --muted: #656d76; --accent: #1a7f37;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.5rem 1rem 2.5rem; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+  }
+  h1 { font-size: 1.35rem; margin: 0 0 .2rem; letter-spacing: -.01em; }
+  h1 code { font-size: 1em; color: var(--accent); }
+  .sub { color: var(--muted); font-size: .9rem; margin: 0 0 1.2rem; text-align: center; }
+  .sub a { color: inherit; }
+
+  #screen-wrap {
+    width: 100%; max-width: 900px; background: #000;
+    border: 1px solid var(--edge); border-radius: 10px; padding: 10px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.35);
+  }
+  canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+
+  #status {
+    margin-top: .85rem; min-height: 1.4em; color: var(--muted);
+    font-size: .88rem; text-align: center;
+  }
+  #status b { color: var(--accent); }
+
+  .keys {
+    margin-top: 1rem; display: flex; flex-wrap: wrap; gap: .45rem;
+    justify-content: center; max-width: 640px;
+  }
+  .keys span {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 6px;
+    padding: .28rem .6rem; font-size: .82rem; color: var(--muted);
+  }
+  .keys kbd {
+    font: 600 .8rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--fg); background: transparent; padding: 0;
+  }
+
+  button {
+    font: inherit; font-size: .88rem; color: var(--fg); background: var(--panel);
+    border: 1px solid var(--edge); border-radius: 6px; padding: .45rem 1rem;
+    cursor: pointer; margin-top: 1rem;
+  }
+  button:hover { border-color: var(--accent); }
+
+  /* Touch d-pad, only where there's no physical keyboard. */
+  #pad { display: none; margin-top: 1.1rem; gap: .5rem;
+         grid-template-columns: repeat(3, 62px); grid-template-rows: repeat(3, 62px); }
+  #pad button {
+    margin: 0; width: 62px; height: 62px; font-size: 1.3rem; border-radius: 10px;
+    -webkit-user-select: none; user-select: none; touch-action: manipulation;
+  }
+  #pad .sp { visibility: hidden; }
+  @media (hover: none) and (pointer: coarse) { #pad { display: grid; } }
+
+  footer { margin-top: 2rem; color: var(--muted); font-size: .82rem; text-align: center; }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1><code>classic-snake</code></h1>
+<p class="sub">
+  A C&nbsp;+&nbsp;ncurses terminal game compiled to WebAssembly.<br>
+  Same <code>snake.c</code> as the terminal build — only the curses layer differs.
+</p>
+
+<div id="screen-wrap"><canvas id="screen" width="960" height="480"></canvas></div>
+<div id="status">Loading…</div>
+
+<div class="keys">
+  <span><kbd>←↑↓→</kbd> / <kbd>WASD</kbd> steer</span>
+  <span><kbd>P</kbd> pause</span>
+  <span><kbd>Q</kbd> quit</span>
+  <span><kbd>*</kbd> +10</span>
+  <span><kbd>$</kbd> +50, rots</span>
+  <span><kbd>%</kbd> kills</span>
+  <span>walls wrap</span>
+</div>
+
+<div id="pad">
+  <button class="sp"></button><button data-key="up">↑</button><button class="sp"></button>
+  <button data-key="left">←</button><button data-key="pause">⏸</button><button data-key="right">→</button>
+  <button class="sp"></button><button data-key="down">↓</button><button class="sp"></button>
+</div>
+
+<button id="restart">Restart</button>
+
+<!-- To link back to your repo, replace the href below with your repo URL. -->
+<footer>
+  C + ncurses → WebAssembly, built with <a href="https://emscripten.org">Emscripten</a>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var COLS = 80, ROWS = 24;
+  var CELL_W = 12, CELL_H = 20;          // canvas pixels per character cell
+
+  var canvas = document.getElementById("screen");
+  var ctx = canvas.getContext("2d", { alpha: false });
+  var statusEl = document.getElementById("status");
+
+  canvas.width  = COLS * CELL_W;
+  canvas.height = ROWS * CELL_H;
+
+  // The 8 curses colours, plus a bright set for A_BOLD.
+  var PALETTE = [
+    "#1c2128", "#f85149", "#3fb950", "#d29922",
+    "#58a6ff", "#bc8cff", "#39c5cf", "#e6edf3"
+  ];
+  var BRIGHT = [
+    "#484f58", "#ff7b72", "#56d364", "#e3b341",
+    "#79c0ff", "#d2a8ff", "#56d4dd", "#ffffff"
+  ];
+
+  // pair number -> {fg, bg}. Pair 0 is the default.
+  var pairs = { 0: { fg: 7, bg: 0 } };
+
+  var Module = window.Module = {
+    termRows: ROWS,
+    termCols: COLS,
+
+    setPair: function (n, fg, bg) {
+      // -1 means "terminal default" (use_default_colors)
+      pairs[n] = { fg: fg < 0 ? 7 : fg, bg: bg < 0 ? 0 : bg };
+    },
+
+    // Read the cell buffer straight out of the wasm heap and paint it.
+    renderScreen: function (ptr, rows, cols) {
+      var heap = Module.HEAPU32;
+      var base = ptr >> 2;                       // byte pointer -> u32 index
+
+      ctx.fillStyle = PALETTE[0];
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.font = "700 " + (CELL_H - 6) + "px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.textBaseline = "top";
+
+      for (var y = 0; y < rows; y++) {
+        for (var x = 0; x < cols; x++) {
+          var cell = heap[base + y * cols + x];
+          var code = cell & 0xff;
+          if (code === 0 || code === 32) continue;      // blank
+
+          var pair = (cell >> 8) & 0xff;
+          var attr = (cell >> 16) & 0xff;
+          var p = pairs[pair] || pairs[0];
+          var bold = (attr & 0x01) !== 0;
+          var rev  = (attr & 0x02) !== 0;
+
+          var fg = (bold ? BRIGHT : PALETTE)[p.fg & 7];
+          var bg = PALETTE[p.bg & 7];
+          if (rev) { var t = fg; fg = bg; bg = t; }
+
+          var px = x * CELL_W, py = y * CELL_H;
+          if (rev || bg !== PALETTE[0]) {
+            ctx.fillStyle = bg;
+            ctx.fillRect(px, py, CELL_W, CELL_H);
+          }
+          ctx.fillStyle = fg;
+          ctx.fillText(String.fromCharCode(code), px + 1, py + 3);
+        }
+      }
+    },
+
+    beep: function () { blip(); },
+
+    print:    function (t) { console.log(t); },
+    printErr: function (t) { console.error(t); },
+
+    onRuntimeInitialized: function () {
+      statusEl.innerHTML = "Click the board, then steer with <b>arrows</b> or <b>WASD</b>.";
+      canvas.focus();
+    },
+
+    // main() returning means game over.
+    onExit: function () {
+      statusEl.innerHTML = "Game over — press <b>Restart</b> to play again.";
+    },
+
+    // Persist the high score across reloads. snake.c writes $HOME/.snake_highscore
+    // with plain fopen(); mounting IDBFS there makes that survive a refresh
+    // without snake.c knowing anything about the browser.
+    preRun: [function () {
+      try {
+        FS.mkdirTree("/home/web_user");
+        FS.mount(IDBFS, {}, "/home/web_user");
+        ENV.HOME = "/home/web_user";
+        Module.addRunDependency("idbfs-load");
+        FS.syncfs(true, function () { Module.removeRunDependency("idbfs-load"); });
+      } catch (e) { console.warn("high-score persistence unavailable:", e); }
+    }]
+  };
+
+  // Flush the high score back to IndexedDB. snake.c writes it during the
+  // game-over screen, so a periodic sync is enough and needs no hook.
+  setInterval(function () {
+    if (window.FS) { try { FS.syncfs(false, function () {}); } catch (e) {} }
+  }, 2000);
+
+  // --- audio: a short blip for beep(), created lazily so autoplay policy
+  // --- doesn't complain before the first interaction.
+  var audio = null;
+  function blip() {
+    try {
+      if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state === "suspended") audio.resume();
+      var osc = audio.createOscillator(), gain = audio.createGain();
+      osc.type = "square";
+      osc.frequency.value = 660;
+      gain.gain.setValueAtTime(0.04, audio.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + 0.08);
+      osc.connect(gain); gain.connect(audio.destination);
+      osc.start(); osc.stop(audio.currentTime + 0.08);
+    } catch (e) { /* no audio, no problem */ }
+  }
+
+  // --- input ----------------------------------------------------------
+  // The curses keycodes, as decimal. Do NOT write these as 0403/0402 -- the
+  // curses headers use octal, but a leading-zero octal literal is a syntax
+  // error under "use strict" and takes this whole script down with it.
+  var KEY = { up: 259, down: 258, left: 260, right: 261 };   // 0403 0402 0404 0405
+
+  function send(code) {
+    if (Module._curses_push_key) Module._curses_push_key(code);
+  }
+
+  var MAP = {
+    ArrowUp: KEY.up, ArrowDown: KEY.down, ArrowLeft: KEY.left, ArrowRight: KEY.right,
+    w: KEY.up, a: KEY.left, s: KEY.down, d: KEY.right,
+    W: KEY.up, A: KEY.left, S: KEY.down, D: KEY.right,
+    p: 112, P: 112, q: 113, Q: 113, " ": 32, Enter: 10
+  };
+
+  window.addEventListener("keydown", function (e) {
+    var code = MAP[e.key];
+    if (code === undefined) return;
+    // Stop arrows and space from scrolling the page.
+    e.preventDefault();
+    send(code);
+  }, { passive: false });
+
+  // Touch d-pad
+  document.getElementById("pad").addEventListener("click", function (e) {
+    var k = e.target.getAttribute("data-key");
+    if (!k) return;
+    send(k === "pause" ? 112 : KEY[k]);
+  });
+
+  // Swipe
+  var sx = 0, sy = 0;
+  canvas.addEventListener("touchstart", function (e) {
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+  }, { passive: true });
+  canvas.addEventListener("touchend", function (e) {
+    var dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    if (Math.abs(dx) < 24 && Math.abs(dy) < 24) return;
+    send(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? KEY.right : KEY.left)
+                                     : (dy > 0 ? KEY.down : KEY.up));
+  }, { passive: true });
+
+  document.getElementById("restart").addEventListener("click", function () {
+    location.reload();
+  });
+
+  // Paint an initial frame so the board isn't a blank rectangle while
+  // the wasm module downloads.
+  ctx.fillStyle = PALETTE[0];
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#8b949e";
+  ctx.font = "700 16px ui-monospace, Menlo, monospace";
+  ctx.fillText("loading WebAssembly…", 20, 20);
+})();
+</script>
+
+{{{ SCRIPT }}}
+
+</body>
+</html>
