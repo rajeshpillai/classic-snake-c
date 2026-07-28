@@ -6,11 +6,12 @@
 # `gh-pages` branch as a single orphan commit (the branch is a build artifact,
 # not history worth keeping). Pages then serves it at:
 #
-#   https://<your-user>.github.io/classic-snake/
+#   https://<owner>.github.io/<repo>/
 #
-# The repo is created on GitHub if it does not exist yet, and Pages is pointed
-# at the gh-pages branch — both via the `gh` CLI, so a first deploy needs no
-# clicking around in Settings.
+# Owner and repo are read from the `origin` remote, so this works unchanged if
+# the repo is renamed. With no origin, the repo is created via the `gh` CLI;
+# Pages is then enabled the same way, best-effort — an unauthenticated gh only
+# costs you that one setting, not the deploy.
 #
 # Usage:
 #   ./gh-deploy.sh                  # dry run: build and verify, push nothing
@@ -19,7 +20,7 @@
 #
 # Overridable via env:
 #   GH_BRANCH   branch Pages serves from        (default: gh-pages)
-#   GH_REPO     repo name to create/push to     (default: classic-snake)
+#   GH_REPO     repo name when creating a new repo  (default: directory name)
 #   GH_REMOTE   full remote URL, skips creation (default: derived from gh)
 #
 # Requires: emsdk on PATH (source ~/emsdk/emsdk_env.sh), gh, git.
@@ -29,7 +30,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 
 GH_BRANCH="${GH_BRANCH:-gh-pages}"
-GH_REPO="${GH_REPO:-classic-snake}"
 DOCS_DIR="$REPO_ROOT/docs"
 PUSH=0
 VISIBILITY="--public"
@@ -63,14 +63,19 @@ command -v emcc >/dev/null \
   || die "emcc not found — run: source ~/emsdk/emsdk_env.sh"
 
 if (( PUSH )); then
-  command -v gh >/dev/null || die "gh not found on PATH"
-  gh auth status >/dev/null 2>&1 \
-    || die "not logged in to GitHub — run: gh auth login"
-
   # Publishing a tree that does not match a commit makes the deployed site
   # impossible to trace back to a revision.
   [[ -z "$(git status --porcelain)" ]] \
     || die "working tree is dirty — commit or stash first (deploys must be traceable)"
+
+  # gh is only needed to create a repo that does not exist yet, and to flip
+  # the Pages setting. With an origin already configured, plain git is
+  # enough and an unauthenticated gh just costs us the Pages automation.
+  if ! git remote get-url origin >/dev/null 2>&1; then
+    command -v gh >/dev/null || die "no origin remote and gh not found — add a remote or install gh"
+    gh auth status >/dev/null 2>&1 \
+      || die "no origin remote, and gh is not logged in — run: gh auth login"
+  fi
 fi
 
 # --- build ------------------------------------------------------------------
@@ -127,15 +132,15 @@ fi
 
 # --- make sure the repo exists ----------------------------------------------
 
-GH_USER="$(gh api user --jq .login)"
-[[ -n "$GH_USER" ]] || die "could not determine your GitHub username"
-
 if [[ -n "${GH_REMOTE:-}" ]]; then
   REMOTE_URL="$GH_REMOTE"
 elif git remote get-url origin >/dev/null 2>&1; then
   REMOTE_URL="$(git remote get-url origin)"
   info "using existing origin: $REMOTE_URL"
 else
+  GH_USER="$(gh api user --jq .login)"
+  [[ -n "$GH_USER" ]] || die "could not determine your GitHub username"
+  GH_REPO="${GH_REPO:-$(basename "$REPO_ROOT")}"
   step "Creating $VISIBILITY repo ${GH_USER}/${GH_REPO}"
   gh repo create "$GH_REPO" $VISIBILITY \
      --source=. --remote=origin \
@@ -143,6 +148,17 @@ else
      || die "gh repo create failed"
   REMOTE_URL="$(git remote get-url origin)"
 fi
+
+# Derive owner/repo from whatever remote we ended up with, rather than
+# assuming the directory name matches the repo name -- it often does not.
+# Handles both https://github.com/o/r(.git) and git@github.com:o/r(.git).
+SLUG="$(printf '%s' "$REMOTE_URL" \
+        | sed -E 's|^git@[^:]+:||; s|^https?://[^/]+/||; s|\.git$||')"
+GH_USER="${SLUG%%/*}"
+GH_REPO="${SLUG##*/}"
+[[ -n "$GH_USER" && -n "$GH_REPO" && "$GH_USER" != "$SLUG" ]] \
+  || die "could not parse owner/repo out of remote: $REMOTE_URL"
+info "publishing to ${GH_USER}/${GH_REPO}"
 
 # Push the source branch too, so gh-pages is traceable to a real commit.
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
@@ -172,14 +188,19 @@ rm -rf "$DOCS_DIR/.git"
 # --- point Pages at the branch ----------------------------------------------
 
 step "Configuring GitHub Pages"
-if gh api "repos/${GH_USER}/${GH_REPO}/pages" >/dev/null 2>&1; then
+# Best-effort. The site is already published at this point; this only flips
+# the repo setting, and it is a one-time thing you can also do by hand.
+if ! command -v gh >/dev/null || ! gh auth status >/dev/null 2>&1; then
+  warn "gh not available or not logged in — skipping Pages configuration"
+  info "enable it once: Settings → Pages → branch '${GH_BRANCH}', folder / (root)"
+elif gh api "repos/${GH_USER}/${GH_REPO}/pages" >/dev/null 2>&1; then
   gh api -X PUT "repos/${GH_USER}/${GH_REPO}/pages" \
-     -f "source[branch]=${GH_BRANCH}" -f "source[path]=/" >/dev/null \
+     -f "source[branch]=${GH_BRANCH}" -f "source[path]=/" >/dev/null 2>&1 \
      && info "Pages already enabled, source set to ${GH_BRANCH}" \
      || warn "could not update Pages config — set it in Settings → Pages"
 else
   gh api -X POST "repos/${GH_USER}/${GH_REPO}/pages" \
-     -f "source[branch]=${GH_BRANCH}" -f "source[path]=/" >/dev/null \
+     -f "source[branch]=${GH_BRANCH}" -f "source[path]=/" >/dev/null 2>&1 \
      && info "Pages enabled on ${GH_BRANCH}" \
      || warn "could not enable Pages — set it in Settings → Pages (branch: ${GH_BRANCH}, folder: /)"
 fi

@@ -3,12 +3,8 @@
 A small, self-contained Snake clone for the terminal, written in C on top of
 ncurses. One source file, no dependencies beyond a curses library.
 
-**▶ [Play it in your browser](https://USERNAME.github.io/classic-snake/)** —
+**▶ [Play it in your browser](https://rajeshpillai.github.io/classic-snake-c/)** —
 the same `snake.c`, compiled to WebAssembly.
-
-> **Set your Pages URL.** Replace `USERNAME` above with your GitHub username
-> once Pages is enabled (Settings → Pages → Source: `main`, folder: `/docs`).
-> One command: `sed -i 's|USERNAME|your-username|' README.md`
 
 ```
 ######################################################
