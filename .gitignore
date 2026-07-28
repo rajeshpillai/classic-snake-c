@@ -1,0 +1,16 @@
+# Build artifacts
+*.o
+snake
+
+# Tutorial binaries -- every lessons/*/ dir builds a binary beside its source
+tutorial/lessons/*/*
+!tutorial/lessons/*/*.c
+!tutorial/lessons/*/*.md
+
+# High score file, if it ever lands here (no $HOME)
+.snake_highscore
+
+# Sanitizer / debug leftovers
+*.dSYM/
+core
+vgcore.*
